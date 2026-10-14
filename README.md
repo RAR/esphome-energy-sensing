@@ -1,4 +1,8 @@
-# load_events
+# esphome-energy-sensing
+
+ESPHome components for making sense of a home's energy readings.
+
+## load_events
 
 An ESPHome component that finds load events (a load switching on or off, its inrush,
 how long it took to settle, the real and apparent power either side) in any meter's
@@ -14,7 +18,7 @@ The step detector came from RAR/esphome-emporia-vue (`better-sensing`), unchange
 
 ```yaml
 external_components:
-  - source: github://RAR/esphome-load-events@main
+  - source: github://RAR/esphome-energy-sensing@main
     components: [load_events]
 
 load_events:
