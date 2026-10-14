@@ -44,6 +44,84 @@ float Channel::apparent_power() const {
   return this->apparent_.empty() ? NAN : sum;
 }
 
+#ifdef USE_LOAD_EVENTS_CYCLES
+void Channel::feed_cycle(const emporiavue::MeteringCycle &cycle) {
+  CycleSample sample;
+  sample.t_ms = cycle.timestamp_ms;
+  sample.period_ms = cycle.period_ms;
+  float power = 0;
+  for (uint8_t port : this->cycle_ports_) {
+    if (port >= 19)
+      return;
+    const emporiavue::MeteringCycleClamp &clamp = cycle.clamps[port];
+    if (clamp.samples == 0)
+      return;
+    // Its leg: the phase its power is read against, or (several, while lines are detected) the one it
+    // draws most against this cycle.
+    uint8_t phase = 0;
+    const uint8_t mask = clamp.voltage_mask;
+    if (mask == 1 || mask == 2 || mask == 4) {
+      phase = mask == 1 ? 0 : mask == 2 ? 1 : 2;
+    } else {
+      for (uint8_t p = 1; p < 3; p++) {
+        if (std::fabs(clamp.power_raw_by_phase[p]) > std::fabs(clamp.power_raw_by_phase[phase]))
+          phase = p;
+      }
+    }
+    power += clamp.power_raw_by_phase[phase];
+    // Each harmonic turned back by k times its leg voltage's angle, and negated (the meter counts
+    // power as -(i * v)), so a consuming load's current in phase with its voltage reads +i.
+    const float angle = std::atan2(cycle.voltage_q[phase], cycle.voltage_i[phase]);
+    for (uint8_t k = 0; k < CYCLE_HARMONICS; k++) {
+      const float turn = CYCLE_HARMONIC_ORDER[k] * angle;
+      const float c = std::cos(turn), s = std::sin(turn);
+      const float hi = clamp.harmonic_i[k], hq = clamp.harmonic_q[k];
+      sample.h_i[k] -= hi * c + hq * s;
+      sample.h_q[k] -= hq * c - hi * s;
+    }
+  }
+  sample.power_raw = power;
+  LockGuard guard(this->cycle_lock_);
+  this->features_->feed(sample);
+}
+
+void Channel::calibrate_cycles(float watts) {
+  LockGuard guard(this->cycle_lock_);
+  this->features_->calibrate(watts);
+}
+
+void Channel::attach_cycle(LoadEvent &event) {
+  if (event.cycling || event.drift)
+    return;
+  CycleStep step;
+  {
+    LockGuard guard(this->cycle_lock_);
+    if (!this->features_->take(event.to_w - event.from_w, event.start_ms, &step))
+      return;
+  }
+  event.has_cycle = true;
+  event.cycle_dw = step.dw;
+  event.inrush = step.inrush;
+  event.inrush_ms = step.inrush_ms;
+  event.dpf = step.dpf;
+  for (uint8_t i = 0; i < 3; i++)
+    event.harmonics[i] = step.h[i];
+  event.cycle_lead_ms = static_cast<int32_t>(event.start_ms - step.t_ms);
+}
+#endif
+
+#ifdef USE_LOAD_EVENTS_CYCLES
+void LoadEventsComponent::set_meter(emporiavue::EmporiaVueComponent *meter) {
+  // Runs in the meter's SPI task, once per mains cycle; the channels are all added before it starts.
+  meter->add_on_cycle_callback([this](const emporiavue::MeteringCycle &cycle) {
+    for (auto *channel : this->channels_) {
+      if (channel->has_cycles())
+        channel->feed_cycle(cycle);
+    }
+  });
+}
+#endif
+
 void LoadEventsComponent::loop() {
   bool any = false;
   for (auto *channel : this->channels_)
@@ -55,10 +133,19 @@ void LoadEventsComponent::loop() {
     if (!channel->dirty())
       continue;
     StepDetector &detector = channel->detector();
+#ifdef USE_LOAD_EVENTS_CYCLES
+    if (channel->has_cycles())
+      channel->calibrate_cycles(channel->power());
+#endif
     if (detector.feed(channel->power(), channel->apparent_power(), now)) {
-      do
-        this->report_(detector.event());
-      while (detector.next());
+      do {
+        LoadEvent event = detector.event();
+#ifdef USE_LOAD_EVENTS_CYCLES
+        if (channel->has_cycles())
+          channel->attach_cycle(event);
+#endif
+        this->report_(event);
+      } while (detector.next());
     }
   }
   if (this->remainder_ != nullptr && this->remainder_whole_->dirty()) {

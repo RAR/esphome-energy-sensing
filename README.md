@@ -43,6 +43,29 @@ mqtt:
     - load_events.replay:   # the last 8 again, marked "replay", after a reconnect
 ```
 
-Host tests for the step detector:
+### Per-cycle detail (experimental)
+
+With a meter that hands over each mains cycle's raw sums, a channel's events also carry a
+`cycle` object: the step as the cycles saw it (`dw`), its `inrush` (the peak cycle's change
+in fundamental current over the settled change) and `inrush_ms`, the load's own current
+harmonics `h` (3rd, 5th, 7th over the fundamental) and its displacement power factor `dpf`,
+and `lead_ms` (how far the frames ran behind the cycles). The steps themselves are still
+found by the frame-level detector; the cycles only add detail
+(`components/load_events/cycle_features.h`).
+
+```yaml
+load_events:
+  emporiavue_id: vue            # needs an emporiavue build with the per-cycle hook (not upstream)
+  channels:
+    - key: total
+      power: [line_1_power, line_2_power]
+      cycle_inputs: [A, B]      # the meter inputs that power comes from: A-C mains, 1-16 circuits
+```
+
+The hook (`add_on_cycle_callback`) is a local patch to rosenrot00/emporiavue's SPI transport
+for now; without `emporiavue_id` nothing here depends on it.
+
+Host tests:
 
     c++ -std=c++17 -Wall -Wextra -I components/load_events tests/test_step_detector.cpp -o test_step && ./test_step
+    c++ -std=c++17 -Wall -Wextra -I components/load_events tests/test_cycle_features.cpp -o test_cycles && ./test_cycles

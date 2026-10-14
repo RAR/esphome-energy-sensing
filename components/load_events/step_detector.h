@@ -87,6 +87,13 @@ struct LoadEvent {
   static constexpr uint8_t MAX_WITH = 2;
   uint8_t with_count{0};
   const char *with_keys[MAX_WITH]{};
+  // From the cycle features, when the meter hands over each mains cycle (cycle_features.h): the step as
+  // the cycles saw it, its inrush and the load's harmonics. has_cycle false otherwise.
+  bool has_cycle{false};
+  float cycle_dw{NAN}, inrush{NAN}, dpf{NAN};
+  float harmonics[3]{NAN, NAN, NAN};  // |I3|, |I5|, |I7| over |I1|
+  uint16_t inrush_ms{0};
+  int32_t cycle_lead_ms{0};  // start_ms less the step's first cycle (the frames' delay)
   uint32_t first_ms{0}, last_ms{0};  // the first and last stored samples
   uint32_t reported_ms{0};           // when it was handed on (set by the component)
   uint8_t count{0};
@@ -162,6 +169,23 @@ struct LoadEvent {
       num("duty", this->duty, "%.2f");
       snprintf(buf, sizeof(buf), ",\"period_ms\":%u,\"spans_ms\":%u", (unsigned) this->period_ms, (unsigned) this->spans_ms);
       out += buf;
+    }
+    if (this->has_cycle) {
+      out += ",\"cycle\":{";
+      snprintf(buf, sizeof(buf), "\"lead_ms\":%d,\"inrush_ms\":%u", (int) this->cycle_lead_ms, (unsigned) this->inrush_ms);
+      out += buf;
+      num("dw", this->cycle_dw, "%.1f");
+      num("inrush", this->inrush, "%.2f");
+      num("dpf", this->dpf, "%.3f");
+      out += ",\"h\":[";
+      for (uint8_t i = 0; i < 3; i++) {
+        if (std::isnan(this->harmonics[i]))
+          snprintf(buf, sizeof(buf), i ? ",null" : "null");
+        else
+          snprintf(buf, sizeof(buf), i ? ",%.3f" : "%.3f", this->harmonics[i]);
+        out += buf;
+      }
+      out += "]}";
     }
     unsigned dt = this->count > 1 ? (unsigned) ((this->last_ms - this->first_ms) / (this->count - 1)) : 0;
     snprintf(buf, sizeof(buf), ",\"dt_ms\":%u,\"samples\":[", dt);

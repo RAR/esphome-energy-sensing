@@ -12,6 +12,13 @@
 
 #include "step_detector.h"
 
+#ifdef USE_LOAD_EVENTS_CYCLES
+#include "esphome/components/emporiavue/emporiavue.h"
+#include "esphome/core/helpers.h"
+
+#include "cycle_features.h"
+#endif
+
 #include <vector>
 
 namespace esphome {
@@ -33,6 +40,22 @@ class Channel {
   StepDetector &detector() { return this->detector_; }
   void clean() { this->dirty_ = false; }
 
+#ifdef USE_LOAD_EVENTS_CYCLES
+  // The meter's inputs this channel's power comes from (0-2 the mains, 3-18 circuits 1-16): with them,
+  // each mains cycle is summed into the cycle features, and events carry what they found.
+  void add_cycle_input(uint8_t port) {
+    if (this->features_ == nullptr)
+      this->features_ = new CycleFeatures(this->detector_.config().min_step_w);  // NOLINT
+    this->cycle_ports_.push_back(port);
+  }
+  bool has_cycles() const { return this->features_ != nullptr; }
+  // From the meter's task: this channel's part of one mains cycle.
+  void feed_cycle(const emporiavue::MeteringCycle &cycle);
+  // From the main loop: the frame's published watts (the raw-to-watts scale), and an event's cycle step.
+  void calibrate_cycles(float watts);
+  void attach_cycle(LoadEvent &event);
+#endif
+
  protected:
   struct Input {
     sensor::Sensor *sensor;
@@ -43,6 +66,11 @@ class Channel {
   StepDetector detector_;
   std::vector<Input *> power_, apparent_;
   bool dirty_{false};
+#ifdef USE_LOAD_EVENTS_CYCLES
+  CycleFeatures *features_{nullptr};
+  std::vector<uint8_t> cycle_ports_;
+  Mutex cycle_lock_;
+#endif
 };
 
 class LoadEventsComponent : public Component {
@@ -57,6 +85,10 @@ class LoadEventsComponent : public Component {
 
   void loop() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
+#ifdef USE_LOAD_EVENTS_CYCLES
+  // Registered while the app is built, before the meter's SPI task starts (it reads the callback list).
+  void set_meter(emporiavue::EmporiaVueComponent *meter);
+#endif
 
   void add_on_load_event_callback(std::function<void(const LoadEvent &)> &&callback) {
     this->callback_.add(std::move(callback));

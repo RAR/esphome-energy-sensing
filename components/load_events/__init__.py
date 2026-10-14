@@ -11,6 +11,8 @@ DEPENDENCIES = ["sensor"]
 
 CONF_APPARENT_POWER = "apparent_power"
 CONF_CHANNELS = "channels"
+CONF_CYCLE_INPUTS = "cycle_inputs"
+CONF_EMPORIAVUE_ID = "emporiavue_id"
 CONF_CONFIRM_FRAMES = "confirm_frames"
 CONF_CYCLE_STEPS = "cycle_steps"
 CONF_CYCLE_TOLERANCE = "cycle_tolerance"
@@ -38,6 +40,11 @@ LoadEventTrigger = load_events_ns.class_(
     "LoadEventTrigger", automation.Trigger.template(LoadEvent.operator("const").operator("ref"))
 )
 ReplayAction = load_events_ns.class_("ReplayAction", automation.Action)
+
+
+# The emporiavue component's input ports.
+CYCLE_INPUT_PORTS = {"A": 0, "B": 1, "C": 2, **{str(n): n + 2 for n in range(1, 17)}}
+EmporiaVueComponent = cg.esphome_ns.namespace("emporiavue").class_("EmporiaVueComponent", cg.Component)
 
 
 def watts(value):
@@ -80,6 +87,11 @@ CHANNEL_SCHEMA = cv.Schema(
         cv.Required(CONF_POWER): cv.All(cv.ensure_list(cv.use_id(sensor.Sensor)), cv.Length(min=1, max=3)),
         cv.Optional(CONF_APPARENT_POWER): cv.All(cv.ensure_list(cv.use_id(sensor.Sensor)), cv.Length(min=1, max=3)),
         cv.Optional(CONF_MIN_STEP): watts,
+        # The meter inputs its power comes from (A-C the mains, 1-16 circuits), for per-cycle detail on its
+        # events (needs emporiavue_id: an emporiavue meter on SPI with the cycle hook).
+        cv.Optional(CONF_CYCLE_INPUTS): cv.All(
+            cv.ensure_list(cv.one_of(*CYCLE_INPUT_PORTS, upper=True, string=True)), cv.Length(min=1, max=3)
+        ),
     }
 )
 
@@ -95,6 +107,8 @@ def _unique_keys(config):
                 raise cv.Invalid(f"remainder: no channel with key {key}")
         if rem[CONF_KEY] in keys:
             raise cv.Invalid("remainder: its key must differ from the channels'")
+    if any(CONF_CYCLE_INPUTS in c for c in config[CONF_CHANNELS]) and CONF_EMPORIAVUE_ID not in config:
+        raise cv.Invalid("cycle_inputs needs emporiavue_id")
     return config
 
 
@@ -103,6 +117,8 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(LoadEventsComponent),
             cv.Optional(CONF_STEP_DETECTION, default={}): STEP_DETECTION_SCHEMA,
+            # An emporiavue meter on SPI whose mains cycles feed the channels' cycle_inputs.
+            cv.Optional(CONF_EMPORIAVUE_ID): cv.use_id(EmporiaVueComponent),
             cv.Required(CONF_CHANNELS): cv.All(cv.ensure_list(CHANNEL_SCHEMA), cv.Length(min=1)),
             # What one channel carries that the listed others do not: loads with no meter of their own.
             cv.Optional(CONF_REMAINDER): cv.Schema(
@@ -145,6 +161,9 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     events = config[CONF_STEP_DETECTION]
+    if CONF_EMPORIAVUE_ID in config:
+        cg.add_define("USE_LOAD_EVENTS_CYCLES")
+        cg.add(var.set_meter(await cg.get_variable(config[CONF_EMPORIAVUE_ID])))
 
     by_key = {}
     for ch in config[CONF_CHANNELS]:
@@ -153,6 +172,8 @@ async def to_code(config):
             cg.add(channel.add_power(await cg.get_variable(sensor_id)))
         for sensor_id in ch.get(CONF_APPARENT_POWER, []):
             cg.add(channel.add_apparent_power(await cg.get_variable(sensor_id)))
+        for port in ch.get(CONF_CYCLE_INPUTS, []):
+            cg.add(channel.add_cycle_input(CYCLE_INPUT_PORTS[port]))
         cg.add(var.add_channel(channel))
         by_key[ch[CONF_KEY]] = channel
 
