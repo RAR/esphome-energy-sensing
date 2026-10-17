@@ -1,5 +1,7 @@
 """Load events from any meter's power sensors (see load_events.h)."""
 
+import inspect
+
 from esphome import automation
 import esphome.codegen as cg
 from esphome.components import sensor
@@ -179,10 +181,15 @@ async def to_code(config):
         await automation.build_automation(trigger, [(LoadEvent.operator("const").operator("ref"), "event")], conf)
 
 
+# replay only schedules the replay, so the action is done at once. ESPHome before 2026.9 has no synchronous=.
+_SYNCHRONOUS = {"synchronous": True} if "synchronous" in inspect.signature(automation.register_action).parameters else {}
+
+
 @automation.register_action(
     "load_events.replay",
     ReplayAction,
     cv.Schema({cv.GenerateID(): cv.use_id(LoadEventsComponent)}),
+    **_SYNCHRONOUS,
 )
 async def replay_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
