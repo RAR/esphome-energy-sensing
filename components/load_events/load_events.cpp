@@ -14,6 +14,24 @@ static const char *const TAG = "load_events";
 static constexpr uint32_t WITH_WITHIN_MS = 600;     // other channels' events this close are tagged as "with"
 static constexpr uint32_t REPLAY_AFTER_MS = 2000;   // mqtt on_connect runs before a publish can go out
 static constexpr float REMAINDER_MISMATCH = 0.02f;  // meters differ by a few percent: a remainder's step must clear it
+static constexpr uint32_t TELL_EVERY_MS = 60000;    // how often missing frames are logged
+
+#ifdef USE_LOAD_EVENTS_EMPORIAVUE
+void LoadEventsComponent::set_meter(emporiavue::EmporiaVueComponent *meter) {
+  this->framed_ = true;
+  // Called just before the meter publishes the frame's sensors (or skips publishing a backlogged one).
+  meter->add_on_frame_callback([this](const emporiavue::EmporiaVueComponent::MeteringFrame &frame) {
+    if (this->have_seq_ &&
+        (frame.acquisition_epoch != this->last_epoch_ || frame.sequence - this->last_seq_ != 1U))
+      this->gaps_++;
+    this->have_seq_ = true;
+    this->last_seq_ = frame.sequence;
+    this->last_epoch_ = frame.acquisition_epoch;
+    this->frame_ms_ = frame.timestamp_ms;
+    this->frames_++;
+  });
+}
+#endif
 
 Channel::Input *Channel::watch_(sensor::Sensor *s) {
   auto *input = new Input{s};  // NOLINT
@@ -45,12 +63,22 @@ float Channel::apparent_power() const {
 }
 
 void LoadEventsComponent::loop() {
+  if (this->framed_ && (this->unpublished_ || this->gaps_) && millis() - this->told_ms_ >= TELL_EVERY_MS) {
+    ESP_LOGD(TAG, "Last minute: %u meter windows not published (each folded into the next step), %u gaps in its frames",
+             (unsigned) this->unpublished_, (unsigned) this->gaps_);
+    this->unpublished_ = this->gaps_ = 0;
+    this->told_ms_ = millis();
+  }
   bool any = false;
   for (auto *channel : this->channels_)
     any |= channel->dirty();
   if (!any)
     return;
-  const uint32_t now = millis();
+  // With the meter's frames, the step is timed by when its frame was measured.
+  const uint32_t now = this->framed_ && this->frames_ ? this->frame_ms_ : millis();
+  if (this->frames_ > 1)
+    this->unpublished_ += this->frames_ - 1;
+  this->frames_ = 0;
   for (auto *channel : this->channels_) {
     if (!channel->dirty())
       continue;

@@ -16,6 +16,7 @@ CONF_CYCLE_STEPS = "cycle_steps"
 CONF_CYCLE_TOLERANCE = "cycle_tolerance"
 CONF_CYCLE_WINDOW = "cycle_window"
 CONF_DRIFT_FRAMES = "drift_frames"
+CONF_EMPORIAVUE_ID = "emporiavue_id"
 CONF_LESS = "less"
 CONF_MAX_NOISE = "max_noise"
 CONF_MIN_STEP = "min_step"
@@ -38,6 +39,7 @@ LoadEventTrigger = load_events_ns.class_(
     "LoadEventTrigger", automation.Trigger.template(LoadEvent.operator("const").operator("ref"))
 )
 ReplayAction = load_events_ns.class_("ReplayAction", automation.Action)
+EmporiaVueComponent = cg.esphome_ns.namespace("emporiavue").class_("EmporiaVueComponent", cg.Component)
 
 
 def watts(value):
@@ -102,6 +104,8 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(LoadEventsComponent),
+            # An emporiavue meter (2026.10.2 or later): its frame hook times each step by when it was measured.
+            cv.Optional(CONF_EMPORIAVUE_ID): cv.use_id(EmporiaVueComponent),
             cv.Optional(CONF_STEP_DETECTION, default={}): STEP_DETECTION_SCHEMA,
             cv.Required(CONF_CHANNELS): cv.All(cv.ensure_list(CHANNEL_SCHEMA), cv.Length(min=1)),
             # What one channel carries that the listed others do not: loads with no meter of their own.
@@ -145,6 +149,9 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     events = config[CONF_STEP_DETECTION]
+    if CONF_EMPORIAVUE_ID in config:
+        cg.add_define("USE_LOAD_EVENTS_EMPORIAVUE")
+        cg.add(var.set_meter(await cg.get_variable(config[CONF_EMPORIAVUE_ID])))
 
     by_key = {}
     for ch in config[CONF_CHANNELS]:

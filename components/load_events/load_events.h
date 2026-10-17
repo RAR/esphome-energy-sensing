@@ -5,12 +5,21 @@
 // step detector. A frame is the set of readings a meter publishes together; the
 // component takes the sensors' raw states (before filters) and runs the detectors
 // once per loop after any of them changed, so one frame is one detector step.
+//
+// Given an emporiavue meter (emporiavue_id), it also listens to that meter's
+// frame hook: each step is then timed by when its frame was measured, not when
+// the loop got to it, and windows the meter measured but did not publish (it
+// publishes only the last of a backlog) or never delivered are counted and logged.
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
 
 #include "step_detector.h"
+
+#ifdef USE_LOAD_EVENTS_EMPORIAVUE
+#include "esphome/components/emporiavue/emporiavue.h"
+#endif
 
 #include <vector>
 
@@ -57,6 +66,9 @@ class LoadEventsComponent : public Component {
 
   void loop() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
+#ifdef USE_LOAD_EVENTS_EMPORIAVUE
+  void set_meter(emporiavue::EmporiaVueComponent *meter);
+#endif
 
   void add_on_load_event_callback(std::function<void(const LoadEvent &)> &&callback) {
     this->callback_.add(std::move(callback));
@@ -74,6 +86,15 @@ class LoadEventsComponent : public Component {
   std::vector<Channel *> remainder_parts_;
 
   CallbackManager<void(const LoadEvent &)> callback_;
+
+  // The meter's frames (emporiavue_id): when the frame being published was measured, the frames since the
+  // last detector step, and what went missing, told in the log once a minute.
+  bool framed_{false};
+  uint32_t frame_ms_{0};
+  uint32_t frames_{0};
+  bool have_seq_{false};
+  uint32_t last_seq_{0}, last_epoch_{0};
+  uint32_t unpublished_{0}, gaps_{0}, told_ms_{0};
   uint32_t seq_{0};
   static constexpr uint8_t REPLAY = 8;
   LoadEvent sent_[REPLAY];

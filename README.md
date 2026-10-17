@@ -14,6 +14,18 @@ top of a meter component without changing it, for example
 [rosenrot00/emporiavue](https://github.com/rosenrot00/emporiavue) on an Emporia Vue
 (stock I2C frames every 500 ms, or SPI windows every ~220 ms).
 
+On an emporiavue meter (2026.10.2 or later), give it the meter's id as well:
+
+```yaml
+load_events:
+  emporiavue_id: vue      # the emporiavue component's id
+```
+
+It then listens to the meter's frame hook: each step is timed by when its frame was
+measured rather than when the loop reached it, and windows the meter measured but did
+not publish (on SPI it publishes only the last of a backlog, so they are folded into the
+next step) or never delivered are counted and logged once a minute.
+
 The step detector came from RAR/esphome-emporia-vue (`better-sensing`), unchanged.
 
 ```yaml
@@ -46,3 +58,7 @@ mqtt:
 Host tests for the step detector:
 
     c++ -std=c++17 -Wall -Wextra -I components/load_events tests/test_step_detector.cpp -o test_step && ./test_step
+
+## Licence
+
+GPL-3.0 (see [LICENSE](LICENSE)), matching rosenrot00/emporiavue, which it builds on.
